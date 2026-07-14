@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GitHub Builder</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 0;
+        padding: 2rem;
+        background: #0f172a;
+        color: #e2e8f0;
+      }
+      .card {
+        max-width: 760px;
+        margin: 0 auto;
+        background: #111827;
+        padding: 2rem;
+        border-radius: 16px;
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.25);
+      }
+      input, button {
+        width: 100%;
+        padding: 0.9rem;
+        border-radius: 10px;
+        border: 1px solid #334155;
+        margin-top: 0.75rem;
+      }
+      button {
+        background: #3b82f6;
+        color: white;
+        cursor: pointer;
+      }
+      pre {
+        margin-top: 1rem;
+        background: #020617;
+        padding: 1rem;
+        border-radius: 10px;
+        white-space: pre-wrap;
+        min-height: 220px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>GitHub Repository Builder</h1>
+      <p>Paste a GitHub repository URL, then clone it into the workspace folder and build it with Docker Compose.</p>
+      <form id="build-form">
+        <input id="repo-url" type="text" placeholder="https://github.com/owner/repo" required />
+        <button type="submit">Build</button>
+      </form>
+      <p id="status">Status: waiting</p>
+      <pre id="log">Logs will appear here...</pre>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>
