@@ -1,5 +1,7 @@
 FROM node:24-alpine
 
+RUN apk add --no-cache git docker-cli docker-cli-compose docker-cli-buildx
+
 WORKDIR /app
 
 COPY package*.json ./

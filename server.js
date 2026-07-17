@@ -226,7 +226,7 @@ function cleanupWorkspace(targetDir, emit) {
 
 function runCommand(command, args, emit, cwd = undefined) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd, shell: false });
+    const child = spawn(command, args, { cwd, shell: false, env: { ...process.env, DOCKER_BUILDKIT: '1' } });
     let output = '';
 
     child.stdout.on('data', (chunk) => {

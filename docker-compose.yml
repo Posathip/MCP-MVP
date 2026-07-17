@@ -1,0 +1,14 @@
+services:
+  mvp-mcp-deployer:
+    build: .
+    container_name: mvp-mcp-deployer
+    restart: unless-stopped
+    ports:
+      - "${PORT:-4000}:${PORT:-4000}"
+    environment:
+      - PORT=${PORT:-4000}
+    working_dir: ${PWD}
+    command: ["node", "server.js"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${PWD}:${PWD}
