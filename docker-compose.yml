@@ -11,7 +11,7 @@ services:
     environment:
       - PORT=${PORT}
     working_dir: ${PWD}
-    command: ["node", "server.js"]
+    command: ["sh", "-c", "npm install --omit=dev && node server.js"]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${PWD}:${PWD}
