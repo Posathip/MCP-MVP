@@ -120,7 +120,7 @@ async function handleBuild({ repoUrl, targetDir, socketId, envEntries = [] }) {
       dockerRunArgs.push(imageName);
       
       if (databaseUri) {
-        dockerRunArgs.push(databaseUri);
+        dockerRunArgs.push(databaseUri, '--transport', 'sse');
       }
       emitDockerCommand(emit, 'docker', dockerRunArgs);
 
