@@ -9,8 +9,9 @@ RUN npm install --omit=dev
 
 COPY . .
 
-ENV PORT=4000
-EXPOSE 4000
+ARG PORT
+ENV PORT=${PORT}
+EXPOSE ${PORT}
 
 CMD ["npm", "start"]
 
