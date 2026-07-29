@@ -1,0 +1,192 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "MVP MCP Deployer API",
+    "version": "1.0.0",
+    "description": "Clones a public GitHub repository and builds/runs it with Docker. Build progress is streamed in real time over a Socket.IO WebSocket connection using the `build-log` event, in addition to the final result being returned in the `POST /api/build` HTTP response."
+  },
+  "servers": [
+    { "url": "http://localhost:4000", "description": "Local development" },
+    { "url": "https://client11.consolutechcloud.com", "description": "Deployed backend" }
+  ],
+  "tags": [
+    { "name": "Health", "description": "Service status" },
+    { "name": "Workspaces", "description": "Cloned repository workspaces" },
+    { "name": "Build", "description": "Clone + build + run a GitHub repository with Docker" }
+  ],
+  "paths": {
+    "/api/health": {
+      "get": {
+        "tags": ["Health"],
+        "summary": "Health check",
+        "responses": {
+          "200": {
+            "description": "Service is running",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HealthResponse" },
+                "example": { "status": "ok", "message": "Deployment service is running" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workspaces/clear": {
+      "post": {
+        "tags": ["Workspaces"],
+        "summary": "Delete everything under the workspaces directory",
+        "responses": {
+          "200": {
+            "description": "Workspaces cleared",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/OkResponse" },
+                "example": { "status": "ok", "message": "Workspaces cleared successfully" }
+              }
+            }
+          },
+          "500": {
+            "description": "Failed to clear workspaces",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/build": {
+      "post": {
+        "tags": ["Build"],
+        "summary": "Clone a GitHub repo and build/run it with Docker",
+        "description": "Clones `repoUrl`, then runs `docker compose build && docker compose up -d` if a compose file is present, otherwise `docker build && docker run` using the Dockerfile. The HTTP response is held open until the deploy finishes (success or failure). While it runs, progress lines are streamed over Socket.IO on the `build-log` event to the room identified by `socketId` (or broadcast to all connected clients if `socketId` is omitted).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/BuildRequest" },
+              "example": {
+                "repoUrl": "https://github.com/owner/repo",
+                "socketId": "sPj9x2Kj3mQwErTyAbCd",
+                "env": [{ "key": "DATABASE_URI", "value": "postgresql://user:pass@host:5432/db" }],
+                "externalPort": "8000",
+                "internalPort": "8000"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Deployment finished successfully",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/BuildSuccessResponse" },
+                "example": { "status": "done", "url": "http://localhost:8000" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or missing repository URL",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+                "example": { "error": "Only GitHub repository URLs are supported right now" }
+              }
+            }
+          },
+          "500": {
+            "description": "Clone, build, or run failed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/BuildErrorResponse" },
+                "example": { "status": "error", "error": "Command failed with exit code 125: docker run ..." }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "HealthResponse": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "example": "ok" },
+          "message": { "type": "string" }
+        }
+      },
+      "OkResponse": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "example": "ok" },
+          "message": { "type": "string" }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": { "type": "string" }
+        }
+      },
+      "EnvEntry": {
+        "type": "object",
+        "required": ["key"],
+        "properties": {
+          "key": { "type": "string", "example": "DATABASE_URI" },
+          "value": { "type": "string", "example": "postgresql://user:pass@host:5432/db" }
+        }
+      },
+      "BuildRequest": {
+        "type": "object",
+        "required": ["repoUrl"],
+        "properties": {
+          "repoUrl": {
+            "type": "string",
+            "description": "Public GitHub repository URL",
+            "example": "https://github.com/owner/repo"
+          },
+          "socketId": {
+            "type": "string",
+            "description": "Socket.IO connection id to stream build-log events to. Obtained from the client after connecting (`socket.id`).",
+            "example": "sPj9x2Kj3mQwErTyAbCd"
+          },
+          "env": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/EnvEntry" }
+          },
+          "externalPort": {
+            "type": "string",
+            "description": "Host port to expose (defaults to internalPort, or 3000)",
+            "example": "8000"
+          },
+          "internalPort": {
+            "type": "string",
+            "description": "Port the app listens on inside the container (defaults to 3000)",
+            "example": "8000"
+          }
+        }
+      },
+      "BuildSuccessResponse": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "example": "done" },
+          "url": {
+            "type": "string",
+            "description": "Endpoint where the deployed app can now be reached",
+            "example": "http://localhost:8000"
+          }
+        }
+      },
+      "BuildErrorResponse": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "example": "error" },
+          "error": { "type": "string" }
+        }
+      }
+    }
+  }
+}

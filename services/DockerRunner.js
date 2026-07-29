@@ -26,7 +26,9 @@ class DockerRunner {
         if (code === 0) {
           resolve(output);
         } else {
-          reject(new Error(`Command failed with exit code ${code}: ${command} ${args.join(' ')}`));
+          const detail = output.trim();
+          const message = `Command failed with exit code ${code}: ${command} ${args.join(' ')}${detail ? `\n${detail}` : ''}`;
+          reject(new Error(message));
         }
       });
     });
