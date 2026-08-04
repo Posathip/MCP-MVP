@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Build</title>
+    <link rel="stylesheet" href="/admin/styles.css" />
+  </head>
+  <body>
+    <div class="dashboard">
+      <div class="dashboard-header">
+        <h1>GitHub Repository Builder</h1>
+        <div class="header-actions">
+          <span id="username-label" style="color: #a8adb8;"></span>
+          <button class="btn-secondary" id="logout-button">Log out</button>
+        </div>
+      </div>
+
+      <nav class="navbar">
+        <a href="/admin/build.html" class="active">Build</a>
+        <a href="/admin/dashboard.html" id="admin-nav-link" style="display: none;">Admin</a>
+      </nav>
+
+      <section>
+        <p style="color: #a8adb8; margin-top: 0;">
+          Paste a GitHub repository URL, then build. It's deployed under your account (<span id="owner-uuid"></span>) — the external port is assigned automatically from an available Resource Server, no need to pick one.
+        </p>
+        <form id="build-form">
+          <label for="repo-url">Repository URL</label>
+          <input id="repo-url" type="text" placeholder="https://github.com/owner/repo" required />
+
+          <div class="port-fields">
+            <label for="internal-port">Internal port (optional, defaults to 3000)
+              <input id="internal-port" type="number" min="1" max="65535" placeholder="e.g. 8000" />
+            </label>
+          </div>
+
+          <label>Environment variables</label>
+          <div id="env-fields" class="env-fields"></div>
+          <button type="button" class="btn-secondary" id="add-env-field">+ Add Variable</button>
+
+          <button type="submit" class="btn-primary" id="build-button">Build</button>
+        </form>
+        <button class="btn-secondary" id="clear-workspaces" type="button" style="margin-top: 12px;">Clear Workspaces</button>
+        <div class="status-line" id="status">Status: waiting</div>
+
+        <div class="panel-grid">
+          <div class="panel">
+            <h3>Build Logs</h3>
+            <pre id="log" class="log-box">Logs will appear here...</pre>
+          </div>
+          <div class="panel">
+            <h3>Docker Commands</h3>
+            <ul id="docker-command-list" class="docker-command-list"></ul>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/admin/auth.js"></script>
+    <script src="/admin/build.js"></script>
+  </body>
+</html>

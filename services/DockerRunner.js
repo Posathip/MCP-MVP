@@ -1,7 +1,7 @@
 const { spawn } = require('child_process');
 
 class DockerRunner {
-  run(command, args, emit, cwd = undefined) {
+  run(command, args, emit = () => {}, cwd = undefined) {
     return new Promise((resolve, reject) => {
       const child = spawn(command, args, { cwd, shell: false, env: { ...process.env, DOCKER_BUILDKIT: '1' } });
       let output = '';

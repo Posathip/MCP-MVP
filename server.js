@@ -11,6 +11,10 @@ const BuildService = require('./services/BuildService');
 const HealthController = require('./controllers/HealthController');
 const WorkspaceController = require('./controllers/WorkspaceController');
 const BuildController = require('./controllers/BuildController');
+const AuthController = require('./controllers/AuthController');
+const ResourceServerController = require('./controllers/ResourceServerController');
+const ContainerController = require('./controllers/ContainerController');
+const AccountController = require('./controllers/AccountController');
 const createApiRouter = require('./routes/apiRouter');
 
 const workspacesDir = path.join(__dirname, 'workspaces');
@@ -30,18 +34,43 @@ const buildService = new BuildService(dockerRunner);
 const healthController = new HealthController();
 const workspaceController = new WorkspaceController(workspacesDir);
 const buildController = new BuildController({ buildService, socketManager, workspacesDir });
+const authController = new AuthController();
+const resourceServerController = new ResourceServerController();
+const containerController = new ContainerController({ dockerRunner });
+const accountController = new AccountController();
 
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') {
     return res.sendStatus(204);
   }
   next();
 });
 app.use(express.json());
-app.use('/api', createApiRouter({ healthController, workspaceController, buildController }));
+app.get('/', (req, res) => res.redirect('/admin/index.html'));
+app.use(
+  '/admin',
+  express.static(path.join(__dirname, 'admin')),
+);
+app.use(
+  '/api',
+  createApiRouter({
+    healthController,
+    workspaceController,
+    buildController,
+    authController,
+    resourceServerController,
+    containerController,
+    accountController,
+  }),
+);
+
+app.use((err, req, res, _next) => {
+  console.error(err);
+  res.status(500).json({ error: 'Internal server error' });
+});
 
 const port = Number(process.env.PORT) || 3000;
 server.listen(port, () => {

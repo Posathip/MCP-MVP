@@ -1,0 +1,51 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Admin {
+  id               Int      @id @default(autoincrement())
+  uuid             String   @unique @default(uuid())
+  username         String   @unique
+  passwordHash     String   @map("password_hash")
+  role             String   @default("user")
+  refreshTokenHash String?  @map("refresh_token_hash")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  @@map("admin")
+}
+
+model ResourceServer {
+  id               String            @id @default(uuid())
+  resourceServerId Int               @unique @default(autoincrement()) @map("resource_server_id")
+  domainName       String            @map("domain_name")
+  port             Int
+  status           String            @default("available") @map("status")
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+  containers       ContainerDetail[]
+
+  @@map("resource_server")
+}
+
+model ContainerDetail {
+  id               String         @id @default(uuid())
+  containerName    String         @unique @map("container_name")
+  containerId      String?        @map("docker_container_id")
+  userId           String         @map("user_id")
+  internalPort     Int            @map("internal_port")
+  resourceServerId Int            @map("resource_server_id")
+  status           String
+  deployType       String         @default("dockerfile") @map("deploy_type")
+  workspaceDir     String?        @map("workspace_dir")
+  createdAt        DateTime       @default(now()) @map("created_at")
+  updatedAt        DateTime       @updatedAt @map("updated_at")
+  resourceServer   ResourceServer @relation(fields: [resourceServerId], references: [resourceServerId])
+
+  @@map("container_detail")
+}

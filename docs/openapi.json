@@ -2,114 +2,42 @@
   "openapi": "3.0.3",
   "info": {
     "title": "MVP MCP Deployer API",
-    "version": "1.0.0",
-    "description": "Clones a public GitHub repository and builds/runs it with Docker. Build progress is streamed in real time over a Socket.IO WebSocket connection using the `build-log` event, in addition to the final result being returned in the `POST /api/build` HTTP response."
+    "version": "1.2.0",
+    "description": "Clones a public GitHub repository and builds/runs it with Docker, tracking deployed containers in Postgres via Prisma. Build progress is streamed in real time over a Socket.IO WebSocket connection using the `build-log` event, in addition to the final result being returned in the `POST /api/build` HTTP response. All endpoints below `/api/build` require a JWT access token obtained from `/api/auth/login` or `/api/auth/register` (`Authorization: Bearer <token>`). Accounts have a `role` of `admin` or `user`: `POST /api/build` works for either role, but resource-server CRUD and container management (`/api/resource-servers/*`, `/api/containers/*`) require `role: 'admin'` and return `403` otherwise. Self-registration via `/api/auth/register` always creates `role: 'user'` accounts — admin accounts must be provisioned directly."
   },
   "servers": [
-    { "url": "http://localhost:4000", "description": "Local development" },
+    { "url": "http://localhost:4003", "description": "Local development" },
     { "url": "https://client11.consolutechcloud.com", "description": "Deployed backend" }
   ],
   "tags": [
     { "name": "Health", "description": "Service status" },
+    { "name": "Auth", "description": "Admin registration, login, and JWT access/refresh token management" },
     { "name": "Workspaces", "description": "Cloned repository workspaces" },
-    { "name": "Build", "description": "Clone + build + run a GitHub repository with Docker" }
+    { "name": "Build", "description": "Clone + build + run a GitHub repository with Docker" },
+    { "name": "Resource Servers", "description": "CRUD for the external domain/port each container is exposed through" },
+    { "name": "Containers", "description": "Containers created by successful (or failed) builds" },
+    { "name": "Accounts", "description": "CRUD for login accounts (both 'user' and 'admin' roles)" }
   ],
-  "paths": {
-    "/api/health": {
-      "get": {
-        "tags": ["Health"],
-        "summary": "Health check",
-        "responses": {
-          "200": {
-            "description": "Service is running",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HealthResponse" },
-                "example": { "status": "ok", "message": "Deployment service is running" }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/workspaces/clear": {
-      "post": {
-        "tags": ["Workspaces"],
-        "summary": "Delete everything under the workspaces directory",
-        "responses": {
-          "200": {
-            "description": "Workspaces cleared",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/OkResponse" },
-                "example": { "status": "ok", "message": "Workspaces cleared successfully" }
-              }
-            }
-          },
-          "500": {
-            "description": "Failed to clear workspaces",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/build": {
-      "post": {
-        "tags": ["Build"],
-        "summary": "Clone a GitHub repo and build/run it with Docker",
-        "description": "Clones `repoUrl`, then runs `docker compose build && docker compose up -d` if a compose file is present, otherwise `docker build && docker run` using the Dockerfile. The HTTP response is held open until the deploy finishes (success or failure). While it runs, progress lines are streamed over Socket.IO on the `build-log` event to the room identified by `socketId` (or broadcast to all connected clients if `socketId` is omitted).",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": { "$ref": "#/components/schemas/BuildRequest" },
-              "example": {
-                "repoUrl": "https://github.com/owner/repo",
-                "socketId": "sPj9x2Kj3mQwErTyAbCd",
-                "env": [{ "key": "DATABASE_URI", "value": "postgresql://user:pass@host:5432/db" }],
-                "externalPort": "8000",
-                "internalPort": "8000"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Deployment finished successfully",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/BuildSuccessResponse" },
-                "example": { "status": "done", "url": "http://localhost:8000" }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid or missing repository URL",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorResponse" },
-                "example": { "error": "Only GitHub repository URLs are supported right now" }
-              }
-            }
-          },
-          "500": {
-            "description": "Clone, build, or run failed",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/BuildErrorResponse" },
-                "example": { "status": "error", "error": "Command failed with exit code 125: docker run ..." }
-              }
-            }
-          }
-        }
-      }
-    }
-  },
   "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Access token from /api/auth/login, /api/auth/register, or /api/auth/refresh."
+      }
+    },
+    "responses": {
+      "Forbidden": {
+        "description": "Authenticated, but the account's role is not 'admin'",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+            "example": { "error": "Admin role required" }
+          }
+        }
+      }
+    },
     "schemas": {
       "HealthResponse": {
         "type": "object",
@@ -148,6 +76,11 @@
             "description": "Public GitHub repository URL",
             "example": "https://github.com/owner/repo"
           },
+          "userId": {
+            "type": "string",
+            "description": "Owner of the resulting container. Optional — defaults to the caller's own account uuid (from the access token) if omitted. Pass it explicitly to build on behalf of someone else (e.g. an external user-management service acting for its own users).",
+            "example": "2cf3d0d2-9332-4528-be7f-cf965d22f644"
+          },
           "socketId": {
             "type": "string",
             "description": "Socket.IO connection id to stream build-log events to. Obtained from the client after connecting (`socket.id`).",
@@ -156,11 +89,6 @@
           "env": {
             "type": "array",
             "items": { "$ref": "#/components/schemas/EnvEntry" }
-          },
-          "externalPort": {
-            "type": "string",
-            "description": "Host port to expose (defaults to internalPort, or 3000)",
-            "example": "8000"
           },
           "internalPort": {
             "type": "string",
@@ -185,6 +113,515 @@
         "properties": {
           "status": { "type": "string", "example": "error" },
           "error": { "type": "string" }
+        }
+      },
+      "AuthCredentials": {
+        "type": "object",
+        "required": ["username", "password"],
+        "properties": {
+          "username": { "type": "string", "example": "admin" },
+          "password": { "type": "string", "format": "password", "example": "at-least-8-characters" }
+        }
+      },
+      "AuthTokens": {
+        "type": "object",
+        "properties": {
+          "admin": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "integer", "description": "Internal sequential id - not used as ContainerDetail.userId." },
+              "uuid": { "type": "string", "format": "uuid", "description": "Stable random id for this account. Used as the default ContainerDetail.userId on POST /api/build.", "example": "2cf3d0d2-9332-4528-be7f-cf965d22f644" },
+              "username": { "type": "string" },
+              "role": { "type": "string", "enum": ["admin", "user"], "description": "'user' for self-registered accounts (via /api/auth/register). Only pre-provisioned accounts have 'admin'." }
+            }
+          },
+          "accessToken": { "type": "string" },
+          "refreshToken": { "type": "string" }
+        }
+      },
+      "RefreshRequest": {
+        "type": "object",
+        "required": ["refreshToken"],
+        "properties": {
+          "refreshToken": { "type": "string" }
+        }
+      },
+      "RefreshResponse": {
+        "type": "object",
+        "properties": {
+          "accessToken": { "type": "string" },
+          "refreshToken": { "type": "string" }
+        }
+      },
+      "Account": {
+        "type": "object",
+        "description": "A login account. Never includes passwordHash or refreshTokenHash.",
+        "properties": {
+          "id": { "type": "integer", "example": 1 },
+          "uuid": { "type": "string", "format": "uuid", "example": "2cf3d0d2-9332-4528-be7f-cf965d22f644" },
+          "username": { "type": "string", "example": "jane" },
+          "role": { "type": "string", "enum": ["admin", "user"], "example": "user" },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "AccountCreateInput": {
+        "type": "object",
+        "required": ["username", "password"],
+        "properties": {
+          "username": { "type": "string", "example": "jane" },
+          "password": { "type": "string", "format": "password", "description": "At least 8 characters.", "example": "at-least-8-characters" },
+          "role": { "type": "string", "enum": ["admin", "user"], "description": "Defaults to 'user' if omitted.", "example": "user" }
+        }
+      },
+      "AccountUpdateInput": {
+        "type": "object",
+        "description": "All fields optional - only the ones provided are changed.",
+        "properties": {
+          "username": { "type": "string" },
+          "password": { "type": "string", "format": "password", "description": "At least 8 characters. Provide to reset the password." },
+          "role": { "type": "string", "enum": ["admin", "user"] }
+        }
+      },
+      "ResourceServer": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid", "description": "Surrogate record id (the real primary key), a real random uuid rather than sequential.", "example": "0c94fd4d-12b4-471a-9596-ec0cbf6cb808" },
+          "resourceServerId": { "type": "integer", "description": "Unique business key. Used in /api/resource-servers/{id} paths and as ContainerDetail.resourceServerId.", "example": 1 },
+          "domainName": { "type": "string", "example": "app.example.com" },
+          "port": { "type": "integer", "example": 8000 },
+          "status": {
+            "type": "string",
+            "enum": ["available", "in_use"],
+            "description": "'available' rows are eligible to be auto-claimed by POST /api/build. Flipped to 'in_use' once claimed.",
+            "example": "available"
+          },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "ResourceServerInput": {
+        "type": "object",
+        "required": ["domainName", "port"],
+        "properties": {
+          "domainName": { "type": "string", "example": "app.example.com" },
+          "port": { "type": "integer", "example": 8000 },
+          "status": {
+            "type": "string",
+            "enum": ["available", "in_use"],
+            "description": "Optional. Defaults to 'available' on create.",
+            "example": "available"
+          }
+        }
+      },
+      "ResourceServerUpdateInput": {
+        "type": "object",
+        "description": "All fields optional - only the ones provided are changed.",
+        "properties": {
+          "domainName": { "type": "string", "example": "app.example.com" },
+          "port": { "type": "integer", "example": 8000 },
+          "status": {
+            "type": "string",
+            "enum": ["available", "in_use"],
+            "description": "Set to 'available' to manually release a stuck row.",
+            "example": "available"
+          }
+        }
+      },
+      "ContainerDetail": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid", "description": "Surrogate record id (the real primary key), a real random uuid rather than sequential. Not used in any path/route - lookups still go through containerName.", "example": "85b62881-ab6e-4a7b-86af-66b86933ed3f" },
+          "containerName": { "type": "string", "description": "Unique business key. The slugified 'owner-repo' name, used as the Docker `--name`/image tag. This is what path params like /api/containers/{id} expect.", "example": "owner-repo" },
+          "containerId": { "type": "string", "nullable": true, "description": "The real Docker-assigned container id, captured from `docker run` output. Null for rows created before this field existed.", "example": "6352d3e45dd6a1f0b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5" },
+          "userId": { "type": "string", "example": "2cf3d0d2-9332-4528-be7f-cf965d22f644" },
+          "internalPort": { "type": "integer", "example": 8000 },
+          "resourceServerId": { "type": "integer", "example": 1 },
+          "status": { "type": "string", "enum": ["running", "error", "stopped"], "example": "running" },
+          "deployType": { "type": "string", "enum": ["dockerfile"], "description": "Always 'dockerfile' - every build runs `docker build` + `docker run` from the repo's Dockerfile.", "example": "dockerfile" },
+          "workspaceDir": { "type": "string", "nullable": true, "description": "Cloned repo path on the server." },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time" },
+          "resourceServer": { "$ref": "#/components/schemas/ResourceServer" }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/api/health": {
+      "get": {
+        "tags": ["Health"],
+        "summary": "Health check",
+        "responses": {
+          "200": {
+            "description": "Service is running",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HealthResponse" },
+                "example": { "status": "ok", "message": "Deployment service is running" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/register": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Create an admin account and receive tokens",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthCredentials" } } }
+        },
+        "responses": {
+          "201": {
+            "description": "Admin created",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthTokens" } } }
+          },
+          "400": { "description": "Missing/invalid fields", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "409": { "description": "Username already taken", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/auth/login": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Log in and receive tokens",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthCredentials" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Logged in",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthTokens" } } }
+          },
+          "401": { "description": "Invalid credentials", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/auth/refresh": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Exchange a refresh token for a new access + refresh token pair (rotates the refresh token)",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RefreshRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "New tokens issued",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RefreshResponse" } } }
+          },
+          "401": { "description": "Refresh token invalid, expired, or revoked", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/auth/logout": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Revoke the current admin's refresh token",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": { "description": "Logged out", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OkResponse" } } } },
+          "401": { "description": "Missing/invalid access token" }
+        }
+      }
+    },
+    "/api/workspaces/clear": {
+      "post": {
+        "tags": ["Workspaces"],
+        "summary": "Delete everything under the workspaces directory",
+        "responses": {
+          "200": {
+            "description": "Workspaces cleared",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/OkResponse" },
+                "example": { "status": "ok", "message": "Workspaces cleared successfully" }
+              }
+            }
+          },
+          "500": {
+            "description": "Failed to clear workspaces",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/build": {
+      "post": {
+        "tags": ["Build"],
+        "summary": "Clone a GitHub repo and build/run it with Docker",
+        "description": "Clones `repoUrl`, then runs `docker build` + `docker run` using the repo's Dockerfile (repos without a Dockerfile fail with a 500). The external port is picked automatically: the lowest-numbered ResourceServer row with `status: 'available'` is claimed (and flipped to `in_use`) and its `port`/`domainName` are used for the deploy and the returned `url`. Rebuilding a repo that's already deployed reuses its existing ResourceServer instead of claiming a new one. If the build fails and a new ResourceServer was claimed for it, that row is released back to `available`. The HTTP response is held open until the deploy finishes (success or failure). While it runs, progress lines are streamed over Socket.IO on the `build-log` event to the room identified by `socketId` (or broadcast to all connected clients if `socketId` is omitted). Once the deploy finishes (success or failure), a row is upserted into ContainerDetail with `status: 'running'` or `status: 'error'`.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/BuildRequest" },
+              "example": {
+                "repoUrl": "https://github.com/owner/repo",
+                "socketId": "sPj9x2Kj3mQwErTyAbCd",
+                "env": [{ "key": "DATABASE_URI", "value": "postgresql://user:pass@host:5432/db" }],
+                "internalPort": "8000"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Deployment finished successfully",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/BuildSuccessResponse" },
+                "example": { "status": "done", "url": "http://app.example.com:8000" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or missing repoUrl / userId",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+                "example": { "error": "Only GitHub repository URLs are supported right now" }
+              }
+            }
+          },
+          "401": { "description": "Missing/invalid access token" },
+          "409": {
+            "description": "No ResourceServer with status 'available' — add one via POST /api/resource-servers first",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+                "example": { "error": "No available resource server (external port) found. Add one under Resource Servers first." }
+              }
+            }
+          },
+          "500": {
+            "description": "Clone, build, or run failed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/BuildErrorResponse" },
+                "example": { "status": "error", "error": "Command failed with exit code 125: docker run ..." }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/resource-servers": {
+      "get": {
+        "tags": ["Resource Servers"],
+        "summary": "List resource servers",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/ResourceServer" } } } }
+          },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      },
+      "post": {
+        "tags": ["Resource Servers"],
+        "summary": "Create a resource server",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ResourceServerInput" } } }
+        },
+        "responses": {
+          "201": { "description": "Created", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ResourceServer" } } } },
+          "400": { "description": "Missing fields", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/api/resource-servers/{id}": {
+      "get": {
+        "tags": ["Resource Servers"],
+        "summary": "Get a resource server",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ResourceServer" } } } },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      },
+      "put": {
+        "tags": ["Resource Servers"],
+        "summary": "Update a resource server",
+        "description": "Also used to manually release a stuck row back to the pool: `{ \"status\": \"available\" }`.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ResourceServerUpdateInput" } } }
+        },
+        "responses": {
+          "200": { "description": "Updated", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ResourceServer" } } } },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      },
+      "delete": {
+        "tags": ["Resource Servers"],
+        "summary": "Delete a resource server",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": {
+          "204": { "description": "Deleted" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/containers": {
+      "get": {
+        "tags": ["Containers"],
+        "summary": "List containers created by builds",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/ContainerDetail" } } } }
+          },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/api/containers/{id}/stop": {
+      "post": {
+        "tags": ["Containers"],
+        "summary": "Stop a container",
+        "description": "Runs `docker stop <containerName>` — the container was started with `--name <containerName>`, so this always resolves it directly. Sets status to 'stopped'.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "containerName" }],
+        "responses": {
+          "200": { "description": "Stopped", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ContainerDetail" } } } },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "description": "No ContainerDetail row with this id", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "500": { "description": "docker stop failed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/containers/{id}/start": {
+      "post": {
+        "tags": ["Containers"],
+        "summary": "Start (resume) a stopped container",
+        "description": "Runs `docker start <containerName>`. Sets status to 'running'.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "containerName" }],
+        "responses": {
+          "200": { "description": "Started", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ContainerDetail" } } } },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "description": "No ContainerDetail row with this id", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "500": { "description": "docker start failed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/containers/{id}/restart": {
+      "post": {
+        "tags": ["Containers"],
+        "summary": "Restart a container",
+        "description": "Runs `docker restart <containerName>`. Works whether it was running or stopped. Sets status to 'running'.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "containerName" }],
+        "responses": {
+          "200": { "description": "Restarted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ContainerDetail" } } } },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "description": "No ContainerDetail row with this id", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "500": { "description": "docker restart failed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/containers/{id}": {
+      "delete": {
+        "tags": ["Containers"],
+        "summary": "Delete a container",
+        "description": "Runs `docker rm -f <containerName>` (fails the whole request if this errors), then best-effort `docker rmi -f <containerName>`, deletes the ContainerDetail row, releases its ResourceServer back to `available`, and removes `workspaceDir` from disk if set.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "containerName" }],
+        "responses": {
+          "204": { "description": "Deleted" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "description": "No ContainerDetail row with this id", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "500": { "description": "docker rm failed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/admins": {
+      "get": {
+        "tags": ["Accounts"],
+        "summary": "List login accounts",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Account" } } } } },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      },
+      "post": {
+        "tags": ["Accounts"],
+        "summary": "Create a login account",
+        "description": "Unlike POST /api/auth/register (always 'user'), this lets an admin create an account with either role directly.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AccountCreateInput" } } }
+        },
+        "responses": {
+          "201": { "description": "Created", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Account" } } } },
+          "400": { "description": "Missing/invalid fields", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "409": { "description": "username already taken", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/admins/{id}": {
+      "get": {
+        "tags": ["Accounts"],
+        "summary": "Get a login account",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Account" } } } },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      },
+      "put": {
+        "tags": ["Accounts"],
+        "summary": "Update a login account",
+        "description": "Update username, role, and/or reset the password. Blocks demoting the last remaining admin account (`400`).",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AccountUpdateInput" } } }
+        },
+        "responses": {
+          "200": { "description": "Updated", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Account" } } } },
+          "400": { "description": "Invalid fields, or would demote the last admin", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      },
+      "delete": {
+        "tags": ["Accounts"],
+        "summary": "Delete a login account",
+        "description": "Blocks deleting your own account, and blocks deleting the last remaining admin account (both `400`).",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": {
+          "204": { "description": "Deleted" },
+          "400": { "description": "Would delete your own account, or the last remaining admin", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
         }
       }
     }

@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Admin Dashboard</title>
+    <link rel="stylesheet" href="/admin/styles.css" />
+  </head>
+  <body>
+    <div class="dashboard">
+      <div class="dashboard-header">
+        <h1>Container Management</h1>
+        <div class="header-actions">
+          <span id="username-label" style="color: #a8adb8;"></span>
+          <button class="btn-secondary" id="logout-button">Log out</button>
+        </div>
+      </div>
+
+      <nav class="navbar">
+        <a href="/admin/build.html">Build</a>
+        <a href="/admin/dashboard.html" class="active">Admin</a>
+      </nav>
+
+      <section>
+        <h2>Resource Servers (domain + external port)</h2>
+        <p style="color: #a8adb8; font-size: 0.85rem; margin-top: -8px;">
+          Builds automatically claim the lowest-numbered <code>available</code> row here for their external port. Add spare rows so builds don't fail with "no available resource server".
+        </p>
+        <form class="inline-form" id="resource-server-form">
+          <div>
+            <label for="domain-name">Domain name</label>
+            <input id="domain-name" type="text" placeholder="app.example.com" required />
+          </div>
+          <div>
+            <label for="external-port">External port</label>
+            <input id="external-port" type="number" min="1" max="65535" required />
+          </div>
+          <button type="submit" class="btn-primary" style="margin-top: 0; width: auto;">Add</button>
+        </form>
+        <p class="error-text" id="resource-server-error"></p>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Domain name</th>
+                <th>Port</th>
+                <th>Status</th>
+                <th>Edit</th>
+                <th>Release</th>
+                <th>Delete</th>
+              </tr>
+            </thead>
+            <tbody id="resource-server-rows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2>Containers</h2>
+        <p class="error-text" id="container-error"></p>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Container Name</th>
+                <th>Container ID</th>
+                <th>User ID</th>
+                <th>Internal port</th>
+                <th>Resource server</th>
+                <th>Status</th>
+                <th>Created</th>
+                <th>Start/Stop</th>
+                <th>Restart</th>
+                <th>Delete</th>
+              </tr>
+            </thead>
+            <tbody id="container-rows"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <script src="/admin/auth.js"></script>
+    <script src="/admin/dashboard.js"></script>
+  </body>
+</html>

@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Admin Login</title>
+    <link rel="stylesheet" href="/admin/styles.css" />
+  </head>
+  <body>
+    <div class="center-page">
+      <div class="card">
+        <p class="toggle-link" style="margin-top: 0;"><a href="/admin/index.html">← Back</a></p>
+        <h1>Admin Login</h1>
+        <form id="auth-form">
+          <label for="username">Username</label>
+          <input id="username" type="text" required autocomplete="username" />
+
+          <label for="password">Password</label>
+          <input id="password" type="password" required autocomplete="current-password" />
+
+          <button type="submit" class="btn-primary" id="submit-button">Log in</button>
+          <p class="error-text" id="error-text"></p>
+        </form>
+      </div>
+    </div>
+
+    <script src="/admin/auth.js"></script>
+    <script src="/admin/admin-login.js"></script>
+  </body>
+</html>
