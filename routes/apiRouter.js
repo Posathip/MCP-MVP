@@ -18,7 +18,7 @@ function createApiRouter({
 
   router.get('/health', (req, res) => healthController.getHealth(req, res));
   router.post('/workspaces/clear', (req, res) => workspaceController.clear(req, res));
-  router.post('/build', authenticate, asyncHandler((req, res) => buildController.startBuild(req, res)));
+  router.post('/build', asyncHandler((req, res) => buildController.startBuild(req, res)));
 
   router.post('/auth/register', asyncHandler((req, res) => authController.register(req, res)));
   router.post('/auth/login', asyncHandler((req, res) => authController.login(req, res)));

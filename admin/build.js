@@ -121,7 +121,9 @@ form.addEventListener('submit', async (event) => {
 
     const response = await apiFetch('/api/build', {
       method: 'POST',
-      body: JSON.stringify({ repoUrl, socketId: socket.id, env: envEntries, internalPort }),
+      // /api/build no longer requires a token, so the server can't derive userId from one -
+      // pass the logged-in account's uuid explicitly to keep container ownership correct.
+      body: JSON.stringify({ repoUrl, socketId: socket.id, env: envEntries, internalPort, userId: auth?.admin?.uuid }),
     });
 
     const data = await response.json();

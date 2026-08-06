@@ -2,8 +2,8 @@
   "openapi": "3.0.3",
   "info": {
     "title": "MVP MCP Deployer API",
-    "version": "1.2.0",
-    "description": "Clones a public GitHub repository and builds/runs it with Docker, tracking deployed containers in Postgres via Prisma. Build progress is streamed in real time over a Socket.IO WebSocket connection using the `build-log` event, in addition to the final result being returned in the `POST /api/build` HTTP response. All endpoints below `/api/build` require a JWT access token obtained from `/api/auth/login` or `/api/auth/register` (`Authorization: Bearer <token>`). Accounts have a `role` of `admin` or `user`: `POST /api/build` works for either role, but resource-server CRUD and container management (`/api/resource-servers/*`, `/api/containers/*`) require `role: 'admin'` and return `403` otherwise. Self-registration via `/api/auth/register` always creates `role: 'user'` accounts — admin accounts must be provisioned directly."
+    "version": "1.3.0",
+    "description": "Clones a public GitHub repository and builds/runs it with Docker, tracking deployed containers in Postgres via Prisma. Build progress is streamed in real time over a Socket.IO WebSocket connection using the `build-log` event, in addition to the final result being returned in the `POST /api/build` HTTP response. `POST /api/build` takes no access token — anyone can call it. Every other endpoint below requires a JWT access token obtained from `/api/auth/login` or `/api/auth/register` (`Authorization: Bearer <token>`). Accounts have a `role` of `admin` or `user`: resource-server CRUD and container/account management (`/api/resource-servers/*`, `/api/containers/*`, `/api/admins/*`) require `role: 'admin'` and return `403` otherwise. Self-registration via `/api/auth/register` always creates `role: 'user'` accounts — admin accounts must be provisioned directly."
   },
   "servers": [
     { "url": "http://localhost:4003", "description": "Local development" },
@@ -78,7 +78,7 @@
           },
           "userId": {
             "type": "string",
-            "description": "Owner of the resulting container. Optional — defaults to the caller's own account uuid (from the access token) if omitted. Pass it explicitly to build on behalf of someone else (e.g. an external user-management service acting for its own users).",
+            "description": "Owner of the resulting container. Optional, and not verified against any account — this endpoint takes no access token, so it's just whatever the caller says it is. Defaults to 'anonymous' if omitted.",
             "example": "2cf3d0d2-9332-4528-be7f-cf965d22f644"
           },
           "socketId": {
@@ -356,8 +356,7 @@
       "post": {
         "tags": ["Build"],
         "summary": "Clone a GitHub repo and build/run it with Docker",
-        "description": "Clones `repoUrl`, then runs `docker build` + `docker run` using the repo's Dockerfile (repos without a Dockerfile fail with a 500). The external port is picked automatically: the lowest-numbered ResourceServer row with `status: 'available'` is claimed (and flipped to `in_use`) and its `port`/`domainName` are used for the deploy and the returned `url`. Rebuilding a repo that's already deployed reuses its existing ResourceServer instead of claiming a new one. If the build fails and a new ResourceServer was claimed for it, that row is released back to `available`. The HTTP response is held open until the deploy finishes (success or failure). While it runs, progress lines are streamed over Socket.IO on the `build-log` event to the room identified by `socketId` (or broadcast to all connected clients if `socketId` is omitted). Once the deploy finishes (success or failure), a row is upserted into ContainerDetail with `status: 'running'` or `status: 'error'`.",
-        "security": [{ "bearerAuth": [] }],
+        "description": "Clones `repoUrl`, then runs `docker build` + `docker run` using the repo's Dockerfile (repos without a Dockerfile fail with a 500). No access token required — anyone can call this endpoint. The external port is picked automatically: the lowest-numbered ResourceServer row with `status: 'available'` is claimed (and flipped to `in_use`) and its `port`/`domainName` are used for the deploy and the returned `url`. Rebuilding a repo that's already deployed reuses its existing ResourceServer instead of claiming a new one. If the build fails and a new ResourceServer was claimed for it, that row is released back to `available`. The HTTP response is held open until the deploy finishes (success or failure). While it runs, progress lines are streamed over Socket.IO on the `build-log` event to the room identified by `socketId` (or broadcast to all connected clients if `socketId` is omitted). Once the deploy finishes (success or failure), a row is upserted into ContainerDetail with `status: 'running'` or `status: 'error'`.",
         "requestBody": {
           "required": true,
           "content": {
@@ -391,7 +390,6 @@
               }
             }
           },
-          "401": { "description": "Missing/invalid access token" },
           "409": {
             "description": "No ResourceServer with status 'available' — add one via POST /api/resource-servers first",
             "content": {

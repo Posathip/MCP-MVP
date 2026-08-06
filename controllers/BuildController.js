@@ -15,9 +15,10 @@ class BuildController {
     const socketId = req.body?.socketId;
     const envEntries = Array.isArray(req.body?.env) ? req.body.env : [];
     const internalPort = req.body?.internalPort;
-    // Defaults to the caller's own account uuid so it's never a guessable sequential id.
-    // An explicit userId in the body is still honored (e.g. an external service building on behalf of someone else).
-    const userId = req.body?.userId ? String(req.body.userId) : req.admin.uuid;
+    // /api/build takes no access token - anyone can call it. userId is just whatever the
+    // caller says it is (e.g. an external service building on behalf of one of its own users),
+    // and falls back to 'anonymous' when omitted entirely.
+    const userId = req.body?.userId ? String(req.body.userId) : 'anonymous';
 
     if (!repoUrl) {
       return res.status(400).json({ error: 'Please provide a GitHub repository URL' });
