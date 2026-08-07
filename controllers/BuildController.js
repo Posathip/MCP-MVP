@@ -30,18 +30,35 @@ class BuildController {
 
     const owner = match[1];
     const repo = match[2];
-    const containerName = slugify(`${owner}-${repo}`);
-    const targetDir = path.join(this.workspacesDir, containerName);
+    const baseName = slugify(`${owner}-${repo}`);
 
-    // Rebuilding a repo that's already deployed reuses its existing port instead of claiming a new one.
-    const existingContainer = await prisma.containerDetail.findUnique({ where: { containerName } });
-    const resourceServer = existingContainer
-      ? await prisma.resourceServer.findUnique({ where: { resourceServerId: existingContainer.resourceServerId } })
-      : await this.#claimAvailableResourceServer();
+    // Rebuilding a repo that's already deployed reuses its existing name/port in place - UNLESS
+    // that old container is currently 'running'. In that case the old one is left completely
+    // untouched (still serving traffic) and this becomes a second, side-by-side instance of the
+    // same repo under a distinct name, on a freshly claimed port.
+    const existingContainer = await prisma.containerDetail.findUnique({ where: { containerName: baseName } });
+    const isSiblingDeploy = Boolean(existingContainer) && existingContainer.status === 'running';
+
+    let containerName = baseName;
+    let resourceServer;
+
+    if (existingContainer && !isSiblingDeploy) {
+      resourceServer = await prisma.resourceServer.findUnique({ where: { resourceServerId: existingContainer.resourceServerId } });
+    } else {
+      resourceServer = await this.#claimAvailableResourceServer();
+      if (isSiblingDeploy && resourceServer) {
+        // Distinct name required - Docker container/image names must be unique, and this one
+        // has to coexist with the still-running original. The freshly claimed port is already
+        // unique, so it doubles as a clear, collision-free suffix.
+        containerName = `${baseName}-${resourceServer.port}`;
+      }
+    }
 
     if (!resourceServer) {
       return res.status(409).json({ error: 'No available resource server (external port) found. Add one under Resource Servers first.' });
     }
+
+    const targetDir = path.join(this.workspacesDir, containerName);
 
     fs.rmSync(targetDir, { recursive: true, force: true });
     fs.mkdirSync(path.dirname(targetDir), { recursive: true });
@@ -60,7 +77,8 @@ class BuildController {
 
     await this.#saveContainerDetail({ result, userId, resourceServerId: resourceServer.resourceServerId, internalPort });
 
-    if (!result.ok && !existingContainer) {
+    const claimedFreshPort = !existingContainer || isSiblingDeploy;
+    if (!result.ok && claimedFreshPort) {
       // Freshly claimed but the build failed - release the port so it can be reused.
       await prisma.resourceServer.update({
         where: { resourceServerId: resourceServer.resourceServerId },
