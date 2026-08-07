@@ -42,7 +42,7 @@ const accountController = new AccountController();
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-API-Key');
   if (req.method === 'OPTIONS') {
     return res.sendStatus(204);
   }
@@ -50,6 +50,14 @@ app.use((req, res, next) => {
 });
 app.use(express.json());
 app.get('/', (req, res) => res.redirect('/admin/index.html'));
+// Dynamic (not a static file) so the admin panel's JS can pick up API_KEY without it being
+// baked into the repo. Same caveat as any browser-embedded secret: it's readable by anyone
+// who loads the page, so this only makes sense as a shared secret for a trusted network,
+// not as a real per-client credential.
+app.get('/admin/config.js', (req, res) => {
+  res.type('application/javascript');
+  res.send(`window.API_KEY = ${JSON.stringify(process.env.API_KEY || '')};`);
+});
 app.use(
   '/admin',
   express.static(path.join(__dirname, 'admin')),

@@ -123,7 +123,8 @@ form.addEventListener('submit', async (event) => {
       method: 'POST',
       // /api/build no longer requires a token, so the server can't derive userId from one -
       // pass the logged-in account's uuid explicitly to keep container ownership correct.
-      body: JSON.stringify({ repoUrl, socketId: socket.id, env: envEntries, internalPort, userId: auth?.admin?.uuid }),
+      // (build-log events now broadcast to every connected client, so no socketId to send either.)
+      body: JSON.stringify({ repoUrl, env: envEntries, internalPort, userId: auth?.admin?.uuid }),
     });
 
     const data = await response.json();

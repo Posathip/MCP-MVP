@@ -59,6 +59,7 @@ async function apiFetch(path, options = {}) {
       ...(options.body ? { 'Content-Type': 'application/json' } : {}),
       ...options.headers,
       Authorization: `Bearer ${token}`,
+      'X-API-Key': window.API_KEY || '',
     },
   });
 

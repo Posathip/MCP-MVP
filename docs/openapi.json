@@ -2,8 +2,8 @@
   "openapi": "3.0.3",
   "info": {
     "title": "MVP MCP Deployer API",
-    "version": "1.3.0",
-    "description": "Clones a public GitHub repository and builds/runs it with Docker, tracking deployed containers in Postgres via Prisma. Build progress is streamed in real time over a Socket.IO WebSocket connection using the `build-log` event, in addition to the final result being returned in the `POST /api/build` HTTP response. `POST /api/build` takes no access token — anyone can call it. Every other endpoint below requires a JWT access token obtained from `/api/auth/login` or `/api/auth/register` (`Authorization: Bearer <token>`). Accounts have a `role` of `admin` or `user`: resource-server CRUD and container/account management (`/api/resource-servers/*`, `/api/containers/*`, `/api/admins/*`) require `role: 'admin'` and return `403` otherwise. Self-registration via `/api/auth/register` always creates `role: 'user'` accounts — admin accounts must be provisioned directly."
+    "version": "1.8.0",
+    "description": "Clones a public GitHub repository and builds/runs it with Docker, tracking deployed containers in Postgres via Prisma. Build progress is streamed in real time over a Socket.IO WebSocket connection using the `build-log` event, in addition to the final result being returned in the `POST /api/build` HTTP response. Two independent auth layers: every endpoint except `/api/auth/*` requires an `X-API-Key` header matching the server's `API_KEY` (a single shared secret gating access at all, checked first); `/api/health`, `/api/workspaces/clear`, and `/api/build` need nothing beyond that, while every other endpoint also requires a JWT access token obtained from `/api/auth/login` or `/api/auth/register` (`Authorization: Bearer <token>`). Accounts have a `role` of `admin` or `user`: resource-server CRUD and container/account management (`/api/resource-servers/*`, `/api/containers/*`, `/api/admins/*`) additionally require `role: 'admin'` and return `403` otherwise. Self-registration via `/api/auth/register` always creates `role: 'user'` accounts — admin accounts must be provisioned directly."
   },
   "servers": [
     { "url": "http://localhost:4003", "description": "Local development" },
@@ -25,6 +25,12 @@
         "scheme": "bearer",
         "bearerFormat": "JWT",
         "description": "Access token from /api/auth/login, /api/auth/register, or /api/auth/refresh."
+      },
+      "apiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key",
+        "description": "Shared secret (server's API_KEY env var). Required on every endpoint except /api/auth/*."
       }
     },
     "responses": {
@@ -81,11 +87,6 @@
             "description": "Owner of the resulting container. Optional, and not verified against any account — this endpoint takes no access token, so it's just whatever the caller says it is. Defaults to 'anonymous' if omitted.",
             "example": "2cf3d0d2-9332-4528-be7f-cf965d22f644"
           },
-          "socketId": {
-            "type": "string",
-            "description": "Socket.IO connection id to stream build-log events to. Obtained from the client after connecting (`socket.id`).",
-            "example": "sPj9x2Kj3mQwErTyAbCd"
-          },
           "env": {
             "type": "array",
             "items": { "$ref": "#/components/schemas/EnvEntry" }
@@ -105,14 +106,21 @@
             "type": "string",
             "description": "Endpoint where the deployed app can now be reached",
             "example": "http://localhost:8000"
-          }
+          },
+          "containerName": { "type": "string", "description": "Slugified 'owner-repo' name - the Docker `--name`/image tag, and the value ContainerDetail/ResourceServer lookups key on.", "example": "owner-repo" },
+          "containerId": { "type": "string", "nullable": true, "description": "The real Docker-assigned container id, captured from `docker run` output.", "example": "6352d3e45dd6a1f0b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5" },
+          "internalPort": { "type": "integer", "description": "Port the app listens on inside the container.", "example": 3000 },
+          "externalPort": { "type": "integer", "description": "Port the app is reachable on from outside (same as ResourceServer.port).", "example": 8000 },
+          "resourceServerId": { "type": "integer", "description": "The ResourceServer row (domain + external port) this build was deployed behind.", "example": 1 },
+          "userId": { "type": "string", "description": "Whatever was passed as (or defaulted for) BuildRequest.userId.", "example": "anonymous" }
         }
       },
       "BuildErrorResponse": {
         "type": "object",
         "properties": {
           "status": { "type": "string", "example": "error" },
-          "error": { "type": "string" }
+          "error": { "type": "string" },
+          "containerName": { "type": "string", "description": "Slugified 'owner-repo' name computed before the failure.", "example": "owner-repo" }
         }
       },
       "AuthCredentials": {
@@ -130,7 +138,7 @@
             "type": "object",
             "properties": {
               "id": { "type": "integer", "description": "Internal sequential id - not used as ContainerDetail.userId." },
-              "uuid": { "type": "string", "format": "uuid", "description": "Stable random id for this account. Used as the default ContainerDetail.userId on POST /api/build.", "example": "2cf3d0d2-9332-4528-be7f-cf965d22f644" },
+              "uuid": { "type": "string", "format": "uuid", "description": "Stable random id for this account. Handy to pass as BuildRequest.userId to keep container ownership attributable, but POST /api/build doesn't require or verify it.", "example": "2cf3d0d2-9332-4528-be7f-cf965d22f644" },
               "username": { "type": "string" },
               "role": { "type": "string", "enum": ["admin", "user"], "description": "'user' for self-registered accounts (via /api/auth/register). Only pre-provisioned accounts have 'admin'." }
             }
@@ -227,6 +235,22 @@
           }
         }
       },
+      "ContainerLogsResponse": {
+        "type": "object",
+        "properties": {
+          "containerName": { "type": "string", "example": "owner-repo" },
+          "tail": { "type": "integer", "description": "Number of lines that were requested (echoes the resolved value, after defaulting/capping).", "example": 200 },
+          "logs": { "type": "string", "description": "Combined stdout+stderr from `docker logs`, newline-separated.", "example": "2026-08-07T10:00:00.000000000Z Server listening on port 3000\n" }
+        }
+      },
+      "ContainerDeletedResponse": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "example": "ok" },
+          "message": { "type": "string", "example": "Container \"owner-repo\" deleted successfully" },
+          "containerName": { "type": "string", "example": "owner-repo" }
+        }
+      },
       "ContainerDetail": {
         "type": "object",
         "properties": {
@@ -251,6 +275,7 @@
       "get": {
         "tags": ["Health"],
         "summary": "Health check",
+        "security": [{ "apiKeyAuth": [] }],
         "responses": {
           "200": {
             "description": "Service is running",
@@ -260,7 +285,8 @@
                 "example": { "status": "ok", "message": "Deployment service is running" }
               }
             }
-          }
+          },
+          "401": { "description": "Missing/invalid API key", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
         }
       }
     },
@@ -331,6 +357,7 @@
       "post": {
         "tags": ["Workspaces"],
         "summary": "Delete everything under the workspaces directory",
+        "security": [{ "apiKeyAuth": [] }],
         "responses": {
           "200": {
             "description": "Workspaces cleared",
@@ -341,6 +368,7 @@
               }
             }
           },
+          "401": { "description": "Missing/invalid API key", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
           "500": {
             "description": "Failed to clear workspaces",
             "content": {
@@ -356,7 +384,8 @@
       "post": {
         "tags": ["Build"],
         "summary": "Clone a GitHub repo and build/run it with Docker",
-        "description": "Clones `repoUrl`, then runs `docker build` + `docker run` using the repo's Dockerfile (repos without a Dockerfile fail with a 500). No access token required — anyone can call this endpoint. The external port is picked automatically: the lowest-numbered ResourceServer row with `status: 'available'` is claimed (and flipped to `in_use`) and its `port`/`domainName` are used for the deploy and the returned `url`. Rebuilding a repo that's already deployed reuses its existing ResourceServer instead of claiming a new one. If the build fails and a new ResourceServer was claimed for it, that row is released back to `available`. The HTTP response is held open until the deploy finishes (success or failure). While it runs, progress lines are streamed over Socket.IO on the `build-log` event to the room identified by `socketId` (or broadcast to all connected clients if `socketId` is omitted). Once the deploy finishes (success or failure), a row is upserted into ContainerDetail with `status: 'running'` or `status: 'error'`.",
+        "description": "Clones `repoUrl`, then runs `docker build` + `docker run` using the repo's Dockerfile (repos without a Dockerfile fail with a 500). No JWT/login required — only the API key. The external port is picked automatically: the lowest-numbered ResourceServer row with `status: 'available'` is claimed (and flipped to `in_use`) and its `port`/`domainName` are used for the deploy and the returned `url`. Rebuilding a repo that's already deployed reuses its existing ResourceServer instead of claiming a new one. If the build fails and a new ResourceServer was claimed for it, that row is released back to `available`. The HTTP response is held open until the deploy finishes (success or failure). While it runs, progress lines are streamed over Socket.IO on the `build-log` event, broadcast to every currently-connected client (there's no per-caller targeting). Once the deploy finishes (success or failure), a row is upserted into ContainerDetail with `status: 'running'` or `status: 'error'`.",
+        "security": [{ "apiKeyAuth": [] }],
         "requestBody": {
           "required": true,
           "content": {
@@ -364,7 +393,6 @@
               "schema": { "$ref": "#/components/schemas/BuildRequest" },
               "example": {
                 "repoUrl": "https://github.com/owner/repo",
-                "socketId": "sPj9x2Kj3mQwErTyAbCd",
                 "env": [{ "key": "DATABASE_URI", "value": "postgresql://user:pass@host:5432/db" }],
                 "internalPort": "8000"
               }
@@ -377,12 +405,21 @@
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/BuildSuccessResponse" },
-                "example": { "status": "done", "url": "http://app.example.com:8000" }
+                "example": {
+                  "status": "done",
+                  "url": "http://app.example.com:8000",
+                  "containerName": "owner-repo",
+                  "containerId": "6352d3e45dd6a1f0b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5",
+                  "internalPort": 3000,
+                  "externalPort": 8000,
+                  "resourceServerId": 1,
+                  "userId": "anonymous"
+                }
               }
             }
           },
           "400": {
-            "description": "Invalid or missing repoUrl / userId",
+            "description": "Invalid or missing repoUrl",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/ErrorResponse" },
@@ -390,6 +427,7 @@
               }
             }
           },
+          "401": { "description": "Missing/invalid API key", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
           "409": {
             "description": "No ResourceServer with status 'available' — add one via POST /api/resource-servers first",
             "content": {
@@ -404,7 +442,7 @@
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/BuildErrorResponse" },
-                "example": { "status": "error", "error": "Command failed with exit code 125: docker run ..." }
+                "example": { "status": "error", "error": "Command failed with exit code 125: docker run ...", "containerName": "owner-repo" }
               }
             }
           }
@@ -415,7 +453,7 @@
       "get": {
         "tags": ["Resource Servers"],
         "summary": "List resource servers",
-        "security": [{ "bearerAuth": [] }],
+        "security": [{ "bearerAuth": [], "apiKeyAuth": [] }],
         "responses": {
           "200": {
             "description": "OK",
@@ -427,7 +465,7 @@
       "post": {
         "tags": ["Resource Servers"],
         "summary": "Create a resource server",
-        "security": [{ "bearerAuth": [] }],
+        "security": [{ "bearerAuth": [], "apiKeyAuth": [] }],
         "requestBody": {
           "required": true,
           "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ResourceServerInput" } } }
@@ -443,7 +481,7 @@
       "get": {
         "tags": ["Resource Servers"],
         "summary": "Get a resource server",
-        "security": [{ "bearerAuth": [] }],
+        "security": [{ "bearerAuth": [], "apiKeyAuth": [] }],
         "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
         "responses": {
           "200": { "description": "OK", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ResourceServer" } } } },
@@ -455,7 +493,7 @@
         "tags": ["Resource Servers"],
         "summary": "Update a resource server",
         "description": "Also used to manually release a stuck row back to the pool: `{ \"status\": \"available\" }`.",
-        "security": [{ "bearerAuth": [] }],
+        "security": [{ "bearerAuth": [], "apiKeyAuth": [] }],
         "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
         "requestBody": {
           "required": true,
@@ -470,7 +508,7 @@
       "delete": {
         "tags": ["Resource Servers"],
         "summary": "Delete a resource server",
-        "security": [{ "bearerAuth": [] }],
+        "security": [{ "bearerAuth": [], "apiKeyAuth": [] }],
         "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
         "responses": {
           "204": { "description": "Deleted" },
@@ -483,7 +521,7 @@
       "get": {
         "tags": ["Containers"],
         "summary": "List containers created by builds",
-        "security": [{ "bearerAuth": [] }],
+        "security": [{ "bearerAuth": [], "apiKeyAuth": [] }],
         "responses": {
           "200": {
             "description": "OK",
@@ -493,13 +531,52 @@
         }
       }
     },
+    "/api/containers/{id}": {
+      "get": {
+        "tags": ["Containers"],
+        "summary": "Get a container's details",
+        "security": [{ "bearerAuth": [], "apiKeyAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "containerName (the slugified owner-repo key) or containerId (the real Docker-assigned id) - either resolves the same row." }],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ContainerDetail" } } } },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "description": "No ContainerDetail row with this id", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/containers/{id}/logs": {
+      "get": {
+        "tags": ["Containers"],
+        "summary": "Get a container's logs",
+        "description": "Runs `docker logs --tail <tail> --timestamps <containerName>` and returns the combined stdout+stderr output as a single string.",
+        "security": [{ "bearerAuth": [], "apiKeyAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "containerName (the slugified owner-repo key) or containerId (the real Docker-assigned id) - either resolves the same row." },
+          { "name": "tail", "in": "query", "required": false, "schema": { "type": "integer", "default": 200, "maximum": 5000 }, "description": "Number of most-recent lines to return. Defaults to 200, capped at 5000." }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ContainerLogsResponse" },
+                "example": { "containerName": "owner-repo", "tail": 200, "logs": "2026-08-07T10:00:00.000000000Z Server listening on port 3000\n" }
+              }
+            }
+          },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "description": "No ContainerDetail row with this id", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "500": { "description": "docker logs failed (e.g. the Docker container itself is gone even though the ContainerDetail row remains)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
     "/api/containers/{id}/stop": {
       "post": {
         "tags": ["Containers"],
         "summary": "Stop a container",
         "description": "Runs `docker stop <containerName>` — the container was started with `--name <containerName>`, so this always resolves it directly. Sets status to 'stopped'.",
-        "security": [{ "bearerAuth": [] }],
-        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "containerName" }],
+        "security": [{ "bearerAuth": [], "apiKeyAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "containerName (the slugified owner-repo key) or containerId (the real Docker-assigned id) - either resolves the same row." }],
         "responses": {
           "200": { "description": "Stopped", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ContainerDetail" } } } },
           "403": { "$ref": "#/components/responses/Forbidden" },
@@ -513,8 +590,8 @@
         "tags": ["Containers"],
         "summary": "Start (resume) a stopped container",
         "description": "Runs `docker start <containerName>`. Sets status to 'running'.",
-        "security": [{ "bearerAuth": [] }],
-        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "containerName" }],
+        "security": [{ "bearerAuth": [], "apiKeyAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "containerName (the slugified owner-repo key) or containerId (the real Docker-assigned id) - either resolves the same row." }],
         "responses": {
           "200": { "description": "Started", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ContainerDetail" } } } },
           "403": { "$ref": "#/components/responses/Forbidden" },
@@ -528,8 +605,8 @@
         "tags": ["Containers"],
         "summary": "Restart a container",
         "description": "Runs `docker restart <containerName>`. Works whether it was running or stopped. Sets status to 'running'.",
-        "security": [{ "bearerAuth": [] }],
-        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "containerName" }],
+        "security": [{ "bearerAuth": [], "apiKeyAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "containerName (the slugified owner-repo key) or containerId (the real Docker-assigned id) - either resolves the same row." }],
         "responses": {
           "200": { "description": "Restarted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ContainerDetail" } } } },
           "403": { "$ref": "#/components/responses/Forbidden" },
@@ -543,11 +620,18 @@
         "tags": ["Containers"],
         "summary": "Delete a container",
         "description": "Runs `docker rm -f <containerName>` (fails the whole request if this errors), then best-effort `docker rmi -f <containerName>`, deletes the ContainerDetail row, releases its ResourceServer back to `available`, and removes `workspaceDir` from disk if set.",
-        "security": [{ "bearerAuth": [] }],
-        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "containerName" }],
+        "security": [{ "apiKeyAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "containerName (the slugified owner-repo key) or containerId (the real Docker-assigned id) - either resolves the same row." }],
         "responses": {
-          "204": { "description": "Deleted" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ContainerDeletedResponse" },
+                "example": { "status": "ok", "message": "Container \"owner-repo\" deleted successfully", "containerName": "owner-repo" }
+              }
+            }
+          },
           "404": { "description": "No ContainerDetail row with this id", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
           "500": { "description": "docker rm failed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
         }
@@ -557,7 +641,7 @@
       "get": {
         "tags": ["Accounts"],
         "summary": "List login accounts",
-        "security": [{ "bearerAuth": [] }],
+        "security": [{ "bearerAuth": [], "apiKeyAuth": [] }],
         "responses": {
           "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Account" } } } } },
           "403": { "$ref": "#/components/responses/Forbidden" }
@@ -567,7 +651,7 @@
         "tags": ["Accounts"],
         "summary": "Create a login account",
         "description": "Unlike POST /api/auth/register (always 'user'), this lets an admin create an account with either role directly.",
-        "security": [{ "bearerAuth": [] }],
+        "security": [{ "bearerAuth": [], "apiKeyAuth": [] }],
         "requestBody": {
           "required": true,
           "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AccountCreateInput" } } }
@@ -584,7 +668,7 @@
       "get": {
         "tags": ["Accounts"],
         "summary": "Get a login account",
-        "security": [{ "bearerAuth": [] }],
+        "security": [{ "bearerAuth": [], "apiKeyAuth": [] }],
         "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
         "responses": {
           "200": { "description": "OK", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Account" } } } },
@@ -596,7 +680,7 @@
         "tags": ["Accounts"],
         "summary": "Update a login account",
         "description": "Update username, role, and/or reset the password. Blocks demoting the last remaining admin account (`400`).",
-        "security": [{ "bearerAuth": [] }],
+        "security": [{ "bearerAuth": [], "apiKeyAuth": [] }],
         "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
         "requestBody": {
           "required": true,
@@ -613,7 +697,7 @@
         "tags": ["Accounts"],
         "summary": "Delete a login account",
         "description": "Blocks deleting your own account, and blocks deleting the last remaining admin account (both `400`).",
-        "security": [{ "bearerAuth": [] }],
+        "security": [{ "bearerAuth": [], "apiKeyAuth": [] }],
         "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
         "responses": {
           "204": { "description": "Deleted" },

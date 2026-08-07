@@ -87,6 +87,9 @@ JWT_ACCESS_SECRET=change-me-access-secret
 JWT_REFRESH_SECRET=change-me-refresh-secret
 JWT_ACCESS_EXPIRES_IN=15m
 JWT_REFRESH_EXPIRES_IN=7d
+
+# Shared secret required (as an X-API-Key header) by every endpoint except /api/auth/*.
+API_KEY=change-me-api-key
 ```
 
 ## Running locally
@@ -108,49 +111,56 @@ cd "/path/to/MVP MCP"
 docker compose up -d --build
 ```
 
-All values (`PORT`, `POSTGRES_*`, `JWT_*`) are read from `.env` — no hardcoded values.
+All values (`PORT`, `POSTGRES_*`, `JWT_*`, `API_KEY`) are read from `.env` — no hardcoded values.
 
 ## Authentication & roles
 
-Every endpoint except `/api/health`, `/api/auth/*`, and `/api/workspaces/clear` requires a `Bearer <accessToken>` header. Access tokens are short-lived (`JWT_ACCESS_EXPIRES_IN`, default 15m); use `/api/auth/refresh` with the refresh token to get a new pair without logging in again. `admin/auth.js` does this automatically on a 401.
+Two independent layers:
+
+- **API key** — every endpoint except `/api/auth/*` (the login flow itself) requires an `X-API-Key` header matching `API_KEY`. It's a single shared secret gating "is this a trusted caller at all", checked by `middleware/apiKey.js`. `/admin/config.js` serves it to the admin panel's JS at runtime (`window.API_KEY`) so `admin/auth.js` can attach it automatically — note this means the key is readable by anyone who loads an admin page, same as any browser-embedded secret; treat it as a trusted-network gate, not a real per-client credential.
+- **JWT (`Bearer <accessToken>`)** — required in addition to the API key on the resource-server, container, and account-management endpoints (identifies *which* account, and its role). Access tokens are short-lived (`JWT_ACCESS_EXPIRES_IN`, default 15m); use `/api/auth/refresh` with the refresh token to get a new pair without logging in again. `admin/auth.js` does this automatically on a 401.
+
+`/api/health`, `/api/workspaces/clear`, and `/api/build` only need the API key — no JWT/login required.
 
 Accounts have a `role` — `admin` or `user`:
-- `POST /api/auth/register` (self-service) always creates `role: 'user'`. There's no self-service way to become `admin` — provision those accounts directly (e.g. `prisma.admin.update({ where: { username }, data: { role: 'admin' } })`, or through `POST /api/auth/register` followed by that same update).
-- `role: 'user'` can build (`POST /api/build`) but gets `403` from resource-server CRUD and container management.
-- `role: 'admin'` can do everything `user` can, plus manage `ResourceServer` rows and stop/start/list containers.
+- `POST /api/auth/register` (self-service) always creates `role: 'user'`. There's no self-service way to become `admin` — provision those accounts directly (e.g. `prisma.admin.update({ where: { username }, data: { role: 'admin' } })`, or through `POST /api/auth/register` followed by that same update, or `node scripts/create-admin.js <username> <password>` for the very first one).
+- `role: 'user'` and `role: 'admin'` are otherwise equivalent for `POST /api/build` (also unauthenticated callers, since it only needs the API key) but `403` from resource-server CRUD and container/account management if not `admin`.
+- `role: 'admin'` can do everything, plus manage `ResourceServer` rows, containers, and other accounts.
 
 ## API
 
-| Method | Path                        | Auth        | Description                                  |
-|--------|-----------------------------|-------------|-----------------------------------------------|
-| GET    | `/api/health`               | –           | Health check                                  |
-| POST   | `/api/auth/register`        | –           | Self-register, always `role: 'user'`. Returns tokens |
-| POST   | `/api/auth/login`           | –           | Log in, returns tokens (includes `role`)       |
-| POST   | `/api/auth/refresh`         | –           | Exchange a refresh token for a new pair (rotates it) |
-| POST   | `/api/auth/logout`          | any role    | Revokes the caller's refresh token             |
-| POST   | `/api/workspaces/clear`     | –           | Deletes everything under `workspaces/`         |
-| POST   | `/api/build`                | any role    | Body: `{ repoUrl, userId?, socketId, env[], internalPort }` — `userId` defaults to the caller's own account uuid. Auto-claims an available ResourceServer's port, clone+build+run, upserts ContainerDetail. `409` if none available |
-| GET    | `/api/resource-servers`     | admin       | List resource servers (domain + external port + status) |
-| POST   | `/api/resource-servers`     | admin       | Create one — `{ domainName, port, status? }` (status defaults to `available`) |
-| GET    | `/api/resource-servers/:id` | admin       | Get one                                        |
-| PUT    | `/api/resource-servers/:id` | admin       | Update one (also used to manually release a stuck row: `{ status: 'available' }`) |
-| DELETE | `/api/resource-servers/:id` | admin       | Delete one                                     |
-| GET    | `/api/containers`           | admin       | List containers created by builds             |
-| POST   | `/api/containers/:id/stop`  | admin       | `:id` is `containerName`. Runs `docker stop <containerName>`, sets `status: 'stopped'` |
-| POST   | `/api/containers/:id/start` | admin       | `:id` is `containerName`. Runs `docker start <containerName>`, sets `status: 'running'` |
-| POST   | `/api/containers/:id/restart` | admin     | Runs `docker restart <containerName>`, sets `status: 'running'` |
-| DELETE | `/api/containers/:id`       | admin       | Removes the Docker container + image, deletes the ContainerDetail row, releases its ResourceServer back to `available`, and deletes `workspaceDir` from disk |
-| GET    | `/api/admins`               | admin       | List login accounts (never includes password/refresh-token hashes) |
-| POST   | `/api/admins`               | admin       | Create one — `{ username, password, role? }` (role defaults to `user`; unlike `/api/auth/register`, this can create `admin` accounts directly) |
-| GET    | `/api/admins/:id`           | admin       | Get one                                        |
-| PUT    | `/api/admins/:id`           | admin       | Update `{ username?, password?, role? }`. Blocks demoting the last remaining admin (`400`) |
-| DELETE | `/api/admins/:id`           | admin       | Delete one. Blocks deleting yourself or the last remaining admin (`400`) |
+| Method | Path                        | Auth              | Description                                  |
+|--------|-----------------------------|-------------------|-----------------------------------------------|
+| GET    | `/api/health`               | API key           | Health check                                  |
+| POST   | `/api/auth/register`        | –                 | Self-register, always `role: 'user'`. Returns tokens |
+| POST   | `/api/auth/login`           | –                 | Log in, returns tokens (includes `role`)       |
+| POST   | `/api/auth/refresh`         | –                 | Exchange a refresh token for a new pair (rotates it) |
+| POST   | `/api/auth/logout`          | JWT (any role)    | Revokes the caller's refresh token             |
+| POST   | `/api/workspaces/clear`     | API key           | Deletes everything under `workspaces/`         |
+| POST   | `/api/build`                | API key           | Body: `{ repoUrl, userId?, env[], internalPort }` — `userId` is caller-supplied, unverified, defaults to `'anonymous'`. Auto-claims an available ResourceServer's port, clone+build+run, upserts ContainerDetail. Returns `{ status, url, containerName, containerId, internalPort, externalPort, resourceServerId, userId }` on success. `409` if no ResourceServer available |
+| GET    | `/api/resource-servers`     | API key + JWT admin | List resource servers (domain + external port + status) |
+| POST   | `/api/resource-servers`     | API key + JWT admin | Create one — `{ domainName, port, status? }` (status defaults to `available`) |
+| GET    | `/api/resource-servers/:id` | API key + JWT admin | Get one                                        |
+| PUT    | `/api/resource-servers/:id` | API key + JWT admin | Update one, all fields optional (also used to manually release a stuck row: `{ status: 'available' }`) |
+| DELETE | `/api/resource-servers/:id` | API key + JWT admin | Delete one                                     |
+| GET    | `/api/containers`           | API key + JWT admin | List containers created by builds             |
+| GET    | `/api/containers/:id`       | API key + JWT admin | `:id` is `containerName` **or** `containerId`. Get one container's details |
+| GET    | `/api/containers/:id/logs`  | API key + JWT admin | `:id` is `containerName` **or** `containerId`. Runs `docker logs --tail <tail> --timestamps`, returns `{ containerName, tail, logs }`. `?tail=` query param, default 200, capped at 5000 |
+| POST   | `/api/containers/:id/stop`  | API key + JWT admin | `:id` is `containerName` **or** `containerId` (real Docker id) - either resolves the row. Runs `docker stop <containerName>`, sets `status: 'stopped'` |
+| POST   | `/api/containers/:id/start` | API key + JWT admin | `:id` is `containerName` **or** `containerId`. Runs `docker start <containerName>`, sets `status: 'running'` |
+| POST   | `/api/containers/:id/restart` | API key + JWT admin | `:id` is `containerName` **or** `containerId`. Runs `docker restart <containerName>`, sets `status: 'running'` |
+| DELETE | `/api/containers/:id`       | API key             | `:id` is `containerName` **or** `containerId`. Removes the Docker container + image, deletes the ContainerDetail row, releases its ResourceServer back to `available`, deletes `workspaceDir` from disk, and returns `{ status: 'ok', message, containerName }` |
+| GET    | `/api/admins`               | API key + JWT admin | List login accounts (never includes password/refresh-token hashes) |
+| POST   | `/api/admins`               | API key + JWT admin | Create one — `{ username, password, role? }` (role defaults to `user`; unlike `/api/auth/register`, this can create `admin` accounts directly) |
+| GET    | `/api/admins/:id`           | API key + JWT admin | Get one                                        |
+| PUT    | `/api/admins/:id`           | API key + JWT admin | Update `{ username?, password?, role? }`. Blocks demoting the last remaining admin (`400`) |
+| DELETE | `/api/admins/:id`           | API key + JWT admin | Delete one. Blocks deleting yourself or the last remaining admin (`400`) |
 
 Full interactive docs (OpenAPI/Swagger) are at `/api/swagger`.
 
 `stop`/`start` always resolve `containerName` directly, since every build runs `docker run --name <containerName>`.
 
-Build progress is emitted over the `build-log` Socket.IO event to the `socketId` passed in the request (or broadcast if omitted). On success, the final event has `stage: 'done'` and includes a `url` field — the endpoint (`http://<host>:<externalPort>`) where the deployed app can now be reached.
+Build progress is emitted over the `build-log` Socket.IO event, broadcast to every connected client (there's no per-caller targeting — any open socket connection sees every build's logs). On success, the final event has `stage: 'done'` and includes a `url` field — the endpoint (`http://<host>:<externalPort>`) where the deployed app can now be reached.
 
 ## Data model
 

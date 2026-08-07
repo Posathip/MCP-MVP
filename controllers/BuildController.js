@@ -12,7 +12,6 @@ class BuildController {
 
   async startBuild(req, res) {
     const repoUrl = req.body?.repoUrl?.trim();
-    const socketId = req.body?.socketId;
     const envEntries = Array.isArray(req.body?.env) ? req.body.env : [];
     const internalPort = req.body?.internalPort;
     // /api/build takes no access token - anyone can call it. userId is just whatever the
@@ -47,7 +46,8 @@ class BuildController {
     fs.rmSync(targetDir, { recursive: true, force: true });
     fs.mkdirSync(path.dirname(targetDir), { recursive: true });
 
-    const emit = this.socketManager.createEmitter(socketId);
+    // build-log events broadcast to every connected client - no per-caller targeting anymore.
+    const emit = this.socketManager.createEmitter();
     const result = await this.buildService.build({
       repoUrl,
       targetDir,
@@ -69,10 +69,23 @@ class BuildController {
     }
 
     if (result.ok) {
-      return res.status(200).json({ status: 'done', url: result.url });
+      return res.status(200).json({
+        status: 'done',
+        url: result.url,
+        containerName: result.containerName,
+        containerId: result.containerId,
+        internalPort: result.internalPort,
+        externalPort: resourceServer.port,
+        resourceServerId: resourceServer.resourceServerId,
+        userId,
+      });
     }
 
-    return res.status(500).json({ status: 'error', error: result.error });
+    return res.status(500).json({
+      status: 'error',
+      error: result.error,
+      containerName: result.containerName,
+    });
   }
 
   async #claimAvailableResourceServer() {

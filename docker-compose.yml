@@ -33,6 +33,7 @@ services:
       - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET}
       - JWT_ACCESS_EXPIRES_IN=${JWT_ACCESS_EXPIRES_IN}
       - JWT_REFRESH_EXPIRES_IN=${JWT_REFRESH_EXPIRES_IN}
+      - API_KEY=${API_KEY}
     working_dir: ${PWD}
     command: ["sh", "-c", "npm install --omit=dev && npx prisma migrate deploy && node server.js"]
     volumes:

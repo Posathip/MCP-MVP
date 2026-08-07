@@ -14,10 +14,40 @@ class ContainerController {
     return res.json(containers);
   }
 
-  async stop(req, res) {
-    const containerName = req.params.id;
-    const container = await this.#find(containerName, res);
+  async get(req, res) {
+    const container = await this.#find(req.params.id, res);
     if (!container) return;
+
+    const withResourceServer = await prisma.containerDetail.findUnique({
+      where: { containerName: container.containerName },
+      include: { resourceServer: true },
+    });
+    return res.json(withResourceServer);
+  }
+
+  async logs(req, res) {
+    const container = await this.#find(req.params.id, res);
+    if (!container) return;
+    const { containerName } = container;
+
+    const tailParam = Number(req.query.tail);
+    // Bounded so a client can't ask for e.g. tail=999999999 and stall the request/response.
+    const tail = Number.isInteger(tailParam) && tailParam > 0 ? Math.min(tailParam, 5000) : 200;
+
+    let logs;
+    try {
+      logs = await this.dockerRunner.run('docker', ['logs', '--tail', String(tail), '--timestamps', containerName]);
+    } catch (error) {
+      return res.status(500).json({ error: error.message });
+    }
+
+    return res.json({ containerName, tail, logs });
+  }
+
+  async stop(req, res) {
+    const container = await this.#find(req.params.id, res);
+    if (!container) return;
+    const { containerName } = container;
 
     try {
       await this.dockerRunner.run('docker', ['stop', containerName]);
@@ -34,9 +64,9 @@ class ContainerController {
   }
 
   async start(req, res) {
-    const containerName = req.params.id;
-    const container = await this.#find(containerName, res);
+    const container = await this.#find(req.params.id, res);
     if (!container) return;
+    const { containerName } = container;
 
     try {
       await this.dockerRunner.run('docker', ['start', containerName]);
@@ -53,9 +83,9 @@ class ContainerController {
   }
 
   async restart(req, res) {
-    const containerName = req.params.id;
-    const container = await this.#find(containerName, res);
+    const container = await this.#find(req.params.id, res);
     if (!container) return;
+    const { containerName } = container;
 
     try {
       await this.dockerRunner.run('docker', ['restart', containerName]);
@@ -72,9 +102,9 @@ class ContainerController {
   }
 
   async remove(req, res) {
-    const containerName = req.params.id;
-    const container = await this.#find(containerName, res);
+    const container = await this.#find(req.params.id, res);
     if (!container) return;
+    const { containerName } = container;
 
     try {
       await this.dockerRunner.run('docker', ['rm', '-f', containerName]);
@@ -94,11 +124,17 @@ class ContainerController {
       fs.rmSync(container.workspaceDir, { recursive: true, force: true });
     }
 
-    return res.status(204).send();
+    // 204 can't carry a body, so 200 + a message instead (matches OkResponse elsewhere in the app).
+    return res.status(200).json({ status: 'ok', message: `Container "${containerName}" deleted successfully`, containerName });
   }
 
-  async #find(containerName, res) {
-    const container = await prisma.containerDetail.findUnique({ where: { containerName } });
+  // Accepts either containerName (the slugified owner-repo business key) or containerId
+  // (the real Docker-assigned id) - whichever the caller happens to have on hand.
+  async #find(idOrName, res) {
+    let container = await prisma.containerDetail.findUnique({ where: { containerName: idOrName } });
+    if (!container && idOrName) {
+      container = await prisma.containerDetail.findFirst({ where: { containerId: idOrName } });
+    }
     if (!container) {
       res.status(404).json({ error: 'Container not found' });
       return null;
